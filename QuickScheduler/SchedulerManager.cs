@@ -1,27 +1,41 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using Quartz;
-using Quartz.Impl.Triggers;
 
 namespace QuickScheduler
 {
+    internal static class EnumExtension
+    {
+        internal static string GetName<T>(this T e)
+            where T : struct, IConvertible
+        {
+            if (!typeof(T).IsEnum)
+            {
+                throw new ArgumentException("T must be an enumerated type");
+            }
+            return Enum.GetName(typeof(T), e);
+        }
+    }
+
+    public enum TriggerName
+    {
+        Cron = 1,
+        Interval = 2
+    }
+
     public interface IProvider<out T>
     {
         T Provide();
     }
 
     public interface ISchedulerProvider : IProvider<IScheduler> { }
-    public interface ITriggerProvider : IProvider<ITrigger> { }
+    public interface ITriggerProvider : IProvider<ITrigger> { string Name { get; } }
     public interface IJobDetailProvider : IProvider<IJobDetail> { }
-
 
     public class SchedulerConfiguration
     {
         public string SchedulerName { get; set; }
-        public string TriggerStrategyName { get; set; }
+        public string TriggerName { get; set; }
         public string TriggerValue { get; set; }
     }
 
@@ -38,25 +52,22 @@ namespace QuickScheduler
 
     public abstract class TriggerProviderStrategy : SchedulerEntity, ITriggerProvider
     {
+        public abstract string Name { get; }
+
         protected TriggerProviderStrategy(SchedulerConfiguration configuration)
             : base(configuration)
         { }
 
-        protected string TriggerIdentityName => $"{Configuration.SchedulerName}_{Configuration.TriggerStrategyName}_Trigger";
+        protected string TriggerIdentityName => $"{Configuration.SchedulerName}_{Configuration.TriggerName}_Trigger";
 
         public abstract ITrigger Provide();
-    }
-
-    public class TriggerProviderStrategyName
-    {
-        public const string TRIGGER_CRON = "Cron";
-        public const string TRIGGER_INTERVAL = "Interval";
     }
 
     public interface ITriggerProviderStrategyCron : ITriggerProvider { }
 
     public class TriggerProviderStrategyCron : TriggerProviderStrategy, ITriggerProviderStrategyCron
     {
+        public override string Name => TriggerName.Cron.GetName();
 
         public TriggerProviderStrategyCron(SchedulerConfiguration configuration)
             : base(configuration)
@@ -81,6 +92,8 @@ namespace QuickScheduler
 
     public class TriggerProviderStrategyInterval : TriggerProviderStrategy, ITriggerProviderStrategyInterval
     {
+        public override string Name => TriggerName.Interval.GetName();
+
         public TriggerProviderStrategyInterval(SchedulerConfiguration configuration)
             : base(configuration)
         { }
@@ -106,18 +119,35 @@ namespace QuickScheduler
         }
     }
 
-    public class TriggerProviderFactory
+    public class TriggerProviderStrategyFactory
     {
         public Dictionary<string, ITriggerProvider> TriggerProviders { get; }
 
-        public TriggerProviderFactory(ITriggerProviderStrategyCron triggerProviderStrategyCron, 
-            ITriggerProviderStrategyInterval triggerProviderStrategyInterval)
+        public TriggerProviderStrategyFactory(ITriggerProviderStrategyCron triggerProviderStrategyCron, ITriggerProviderStrategyInterval triggerProviderStrategyInterval)
         {
-            TriggerProviders = new Dictionary<string, ITriggerProvider>
+            TriggerProviders = new Dictionary<string, ITriggerProvider>();
+            Register(triggerProviderStrategyCron);
+            Register(triggerProviderStrategyInterval);
+        }
+
+        public void Register(ITriggerProvider triggerProvider)
+        {
+            TriggerProviders.Add(triggerProvider.Name, triggerProvider);
+        }
+
+        public ITriggerProvider Get(string triggerName)
+        {
+            if (triggerName == null)
             {
-                { TriggerProviderStrategyName.TRIGGER_CRON, triggerProviderStrategyCron},
-                { TriggerProviderStrategyName.TRIGGER_INTERVAL, triggerProviderStrategyInterval },
-            };
+                throw new ArgumentNullException(nameof(triggerName));
+            }
+
+            if (!TriggerProviders.ContainsKey(triggerName))
+            {
+                throw new ArgumentException($"triggerName \"{triggerName}\" is not registered.");    
+            }
+
+            return TriggerProviders[triggerName];
         }
     }
 
@@ -129,16 +159,16 @@ namespace QuickScheduler
 
     public abstract class QuartzScheduler : IQuartzScheduler
     {
-        private readonly ITriggerProvider _triggerProvider;
+        private readonly TriggerProviderStrategyFactory _triggerProviderStrategyFactory;
         private readonly IJobDetailProvider _jobDetailProvider;
         private readonly ISchedulerProvider _schedulerProvider;
 
         public abstract string TriggerName { get; }
         public abstract string GroupName { get; }
 
-        protected QuartzScheduler(ITriggerProvider triggerProvider, IJobDetailProvider jobDetailProvider, ISchedulerProvider schedulerProvider)
+        protected QuartzScheduler(TriggerProviderStrategyFactory triggerProviderStrategyFactory, IJobDetailProvider jobDetailProvider, ISchedulerProvider schedulerProvider)
         {
-            _triggerProvider = triggerProvider;
+            _triggerProviderStrategyFactory = triggerProviderStrategyFactory;
             _jobDetailProvider = jobDetailProvider;
             _schedulerProvider = schedulerProvider;
         }
@@ -150,19 +180,23 @@ namespace QuickScheduler
             scheduler.Start().Wait();
 
             var job = _jobDetailProvider.Provide();
-            var trigger = _triggerProvider.Provide();
+
+            var triggerProvider = _triggerProviderStrategyFactory.Get(schedulerConfiguration?.TriggerName);
+            var trigger = triggerProvider.Provide();
 
             scheduler.ScheduleJob(job, trigger).Wait();
         }
 
         public virtual void Reschedule(SchedulerConfiguration schedulerConfiguration=null)
         {
+            var triggerProvider = _triggerProviderStrategyFactory.Get(schedulerConfiguration?.TriggerName);
+
             var scheduler = _schedulerProvider.Provide();
             scheduler.RescheduleJob(
                 new TriggerKey(
-                    TriggerName,
+                    triggerProvider.Name,
                     GroupName),
-                _triggerProvider.Provide());
+                triggerProvider.Provide());
         }
     }
 
