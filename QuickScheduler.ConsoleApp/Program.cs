@@ -6,8 +6,7 @@ namespace QuickScheduler.ConsoleApp
     {
         static void Main(string[] args)
         {
-            new QuartzScheduler(new SchedulerConfiguration
-            {JobName = "Default", SchedulerName = "Default", TriggerName = "Interval", TriggerValue = "1"}).Schedule();
+            new QuartzScheduler(SchedulerConfiguration.Default).Schedule();
 
             Console.ReadLine();
         }

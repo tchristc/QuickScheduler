@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 using Quartz;
 using Quartz.Impl;
@@ -44,6 +45,14 @@ namespace QuickScheduler
         public string TriggerValue { get; set; }
 
         public string JobName { get; set; }
+
+        public readonly SchedulerConfiguration Default = new SchedulerConfiguration
+        {
+            JobName = "Default",
+            SchedulerName = "Default",
+            TriggerName = "Interval",
+            TriggerValue = "1"
+        };
     }
 
     public abstract class SchedulerEntity
@@ -320,14 +329,19 @@ namespace QuickScheduler
 
         public TProvider Get(string providerName)
         {
-            if (providerName == null)
-            {
-                throw new ArgumentNullException(nameof(providerName));
-            }
+            //if (providerName == null)
+            //{
+            //    throw new ArgumentNullException(nameof(providerName));
+            //}
 
-            if (!Providers.ContainsKey(providerName))
+            //if (!Providers.ContainsKey(providerName))
+            //{
+            //    throw new ArgumentException($"providerName \"{providerName}\" is not registered.");
+            //}
+
+            if (providerName == null || !Providers.ContainsKey(providerName))
             {
-                throw new ArgumentException($"providerName \"{providerName}\" is not registered.");
+                return Providers.Values.FirstOrDefault();
             }
 
             return Providers[providerName];
@@ -338,8 +352,8 @@ namespace QuickScheduler
     {
         public TriggerProviderFactory(ITriggerProviderCron triggerProviderCron, ITriggerProviderInterval triggerProviderInterval)
         {
-            Register(triggerProviderCron);
             Register(triggerProviderInterval);
+            Register(triggerProviderCron);
         }
     }
 
@@ -373,22 +387,25 @@ namespace QuickScheduler
         private readonly SchedulerProviderFactory _schedulerProviderFactory;
 
 
-        //protected QuartzScheduler(
-        //    TriggerProviderFactory triggerProviderFactory, 
-        //    JobDetailProviderFactory jobDetailProviderFactory, 
-        //    SchedulerProviderFactory schedulerProviderFactory)
-        //{
-        //    _triggerProviderFactory = triggerProviderFactory;
-        //    _jobDetailProviderFactory = jobDetailProviderFactory;
-        //    _schedulerProviderFactory = schedulerProviderFactory;
-        //}
-
-        public QuartzScheduler(SchedulerConfiguration configuration)
+        public QuartzScheduler(SchedulerConfiguration configuration,
+            TriggerProviderFactory triggerProviderFactory,
+            JobDetailProviderFactory jobDetailProviderFactory,
+            SchedulerProviderFactory schedulerProviderFactory)
             : base(configuration)
         {
-            _triggerProviderFactory = new TriggerProviderFactory(new TriggerProviderCron(configuration), new TriggerProviderInterval(configuration));
-            _jobDetailProviderFactory = new JobDetailProviderFactory(new DefaultJobDetailProvider(configuration));
-            _schedulerProviderFactory = new SchedulerProviderFactory(new DefaultSchedulerProvider(configuration));
+            _triggerProviderFactory = triggerProviderFactory;
+            _jobDetailProviderFactory = jobDetailProviderFactory;
+            _schedulerProviderFactory = schedulerProviderFactory;
+        }
+
+        public QuartzScheduler(SchedulerConfiguration configuration)
+            : this(configuration,
+               new TriggerProviderFactory(
+                    new TriggerProviderCron(configuration),
+                    new TriggerProviderInterval(configuration)),
+                new JobDetailProviderFactory(new DefaultJobDetailProvider(configuration)),
+                new SchedulerProviderFactory(new DefaultSchedulerProvider(configuration)))
+        {
         }
 
         public virtual void Schedule()
@@ -417,16 +434,6 @@ namespace QuickScheduler
                     triggerProvider.Name,
                     SchedulerGroupName),
                 triggerProvider.Provide());
-        }
-    }
-
-    public class SchedulerManager
-    {
-        public Dictionary<string, QuartzScheduler> SchedulersByName { get; private set; }
-
-        public SchedulerManager()
-        {
-            SchedulersByName = new Dictionary<string, QuartzScheduler>();
         }
     }
 }
