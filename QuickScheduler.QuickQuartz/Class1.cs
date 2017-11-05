@@ -8,5 +8,6 @@ namespace QuickScheduler.QuickQuartz
 {
     public class Class1
     {
+        
     }
 }

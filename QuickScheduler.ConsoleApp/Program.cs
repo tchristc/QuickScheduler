@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace QuickScheduler.ConsoleApp
 {
@@ -10,6 +6,10 @@ namespace QuickScheduler.ConsoleApp
     {
         static void Main(string[] args)
         {
+            new QuartzScheduler(new SchedulerConfiguration
+            {JobName = "Default", SchedulerName = "Default", TriggerName = "Interval", TriggerValue = "1"}).Schedule();
+
+            Console.ReadLine();
         }
     }
 }

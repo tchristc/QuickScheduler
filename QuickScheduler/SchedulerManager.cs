@@ -1,6 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Diagnostics;
+using System.Threading.Tasks;
 using Quartz;
+using Quartz.Impl;
 
 namespace QuickScheduler
 {
@@ -25,11 +29,12 @@ namespace QuickScheduler
 
     public interface IProvider<out T>
     {
+        string Name { get; }
         T Provide();
     }
 
     public interface ISchedulerProvider : IProvider<IScheduler> { }
-    public interface ITriggerProvider : IProvider<ITrigger> { string Name { get; } }
+    public interface ITriggerProvider : IProvider<ITrigger> { }
     public interface IJobDetailProvider : IProvider<IJobDetail> { }
 
     public class SchedulerConfiguration
@@ -37,6 +42,8 @@ namespace QuickScheduler
         public string SchedulerName { get; set; }
         public string TriggerName { get; set; }
         public string TriggerValue { get; set; }
+
+        public string JobName { get; set; }
     }
 
     public abstract class SchedulerEntity
@@ -47,14 +54,15 @@ namespace QuickScheduler
             Configuration = configuration;
         }
 
-        protected string SchedulerGroup => $"{Configuration.SchedulerName}_Group";
+        protected string SchedulerGroupName => $"{Configuration.SchedulerName}_Group";
+        protected string SchedulerJobName => $"{Configuration.SchedulerName}_Job";
     }
 
-    public abstract class TriggerProviderStrategy : SchedulerEntity, ITriggerProvider
+    public abstract class TriggerProvider : SchedulerEntity, ITriggerProvider
     {
         public abstract string Name { get; }
 
-        protected TriggerProviderStrategy(SchedulerConfiguration configuration)
+        protected TriggerProvider(SchedulerConfiguration configuration)
             : base(configuration)
         { }
 
@@ -63,13 +71,13 @@ namespace QuickScheduler
         public abstract ITrigger Provide();
     }
 
-    public interface ITriggerProviderStrategyCron : ITriggerProvider { }
+    public interface ITriggerProviderCron : ITriggerProvider { }
 
-    public class TriggerProviderStrategyCron : TriggerProviderStrategy, ITriggerProviderStrategyCron
+    public class TriggerProviderCron : TriggerProvider, ITriggerProviderCron
     {
         public override string Name => TriggerName.Cron.GetName();
 
-        public TriggerProviderStrategyCron(SchedulerConfiguration configuration)
+        public TriggerProviderCron(SchedulerConfiguration configuration)
             : base(configuration)
         { }
 
@@ -81,20 +89,20 @@ namespace QuickScheduler
             //Seconds Minutes Hours DayOfMonth Month DayOfWeek Year
             //“0 0 12 ? * * ” = “everyday at 12:00 pm” (values are zero indexed)
             var trigger = TriggerBuilder.Create()
-              .WithIdentity(TriggerIdentityName, SchedulerGroup)
+              .WithIdentity(TriggerIdentityName, SchedulerGroupName)
               .WithCronSchedule(Configuration.TriggerValue)
               .Build();
             return trigger;
         }
     }
 
-    public interface ITriggerProviderStrategyInterval : ITriggerProvider { }
+    public interface ITriggerProviderInterval : ITriggerProvider { }
 
-    public class TriggerProviderStrategyInterval : TriggerProviderStrategy, ITriggerProviderStrategyInterval
+    public class TriggerProviderInterval : TriggerProvider, ITriggerProviderInterval
     {
         public override string Name => TriggerName.Interval.GetName();
 
-        public TriggerProviderStrategyInterval(SchedulerConfiguration configuration)
+        public TriggerProviderInterval(SchedulerConfiguration configuration)
             : base(configuration)
         { }
 
@@ -108,7 +116,7 @@ namespace QuickScheduler
                 throw new FormatException($"TriggerValue was not formatted as an int. The value was {Configuration.TriggerValue}.");
 
             var trigger = TriggerBuilder.Create()
-              .WithIdentity(TriggerIdentityName, SchedulerGroup)
+              .WithIdentity(TriggerIdentityName, SchedulerGroupName)
               .StartNow()
               .WithSimpleSchedule(x => x
                   .WithIntervalInSeconds(interval)
@@ -119,83 +127,295 @@ namespace QuickScheduler
         }
     }
 
-    public class TriggerProviderStrategyFactory
+    public interface IDefaultJob : IJob { }
+
+    public class DefaultJob : IDefaultJob
     {
-        public Dictionary<string, ITriggerProvider> TriggerProviders { get; }
-
-        public TriggerProviderStrategyFactory(ITriggerProviderStrategyCron triggerProviderStrategyCron, ITriggerProviderStrategyInterval triggerProviderStrategyInterval)
+        public Task Execute(IJobExecutionContext context)
         {
-            TriggerProviders = new Dictionary<string, ITriggerProvider>();
-            Register(triggerProviderStrategyCron);
-            Register(triggerProviderStrategyInterval);
-        }
-
-        public void Register(ITriggerProvider triggerProvider)
-        {
-            TriggerProviders.Add(triggerProvider.Name, triggerProvider);
-        }
-
-        public ITriggerProvider Get(string triggerName)
-        {
-            if (triggerName == null)
+            try
             {
-                throw new ArgumentNullException(nameof(triggerName));
+                Console.WriteLine("Test.");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
             }
 
-            if (!TriggerProviders.ContainsKey(triggerName))
-            {
-                throw new ArgumentException($"triggerName \"{triggerName}\" is not registered.");    
-            }
-
-            return TriggerProviders[triggerName];
+            return Task.FromResult(0);
         }
     }
+
+
+
+    public abstract class JobDetailProvider : SchedulerEntity, IJobDetailProvider
+    {
+        public abstract string Name { get; }
+
+        protected JobDetailProvider(SchedulerConfiguration configuration)
+            : base(configuration)
+        { }
+
+        public abstract IJobDetail Provide();
+    }
+
+    public interface IDefaultJobDetailProvider : IJobDetailProvider { }
+
+    public class DefaultJobDetailProvider : JobDetailProvider, IDefaultJobDetailProvider
+    {
+        public override string Name => "Default";
+
+        public DefaultJobDetailProvider(SchedulerConfiguration configuration)
+            : base(configuration)
+        { }
+
+        public override IJobDetail Provide()
+        {
+            var job = JobBuilder.Create<DefaultJob>()
+                .WithIdentity(SchedulerJobName, SchedulerGroupName)
+                .Build();
+            return job;
+        }
+    }
+
+    //public class JobQueueConsumerJobTriggerListener : ITriggerListener
+    //{
+    //    private readonly IJobQueueSettings _jobQueueSettings;
+    //    private readonly IApplicationSettingsBusiness _applicationSettingsBusiness;
+
+    //    public JobQueueConsumerJobTriggerListener(IJobQueueSettings jobQueueSettings, IApplicationSettingsBusiness applicationSettingsBusiness)
+    //    {
+    //        _jobQueueSettings = jobQueueSettings;
+    //        _applicationSettingsBusiness = applicationSettingsBusiness;
+    //    }
+
+    //    public Task TriggerFired(ITrigger trigger, IJobExecutionContext context)
+    //    {
+    //        return Task.FromResult(0);
+    //    }
+
+    //    public Task<bool> VetoJobExecution(ITrigger trigger, IJobExecutionContext context)
+    //    {
+
+    //        var jobs = context.Scheduler.GetCurrentlyExecutingJobs().Result;
+    //        foreach (var job in jobs)
+    //        {
+    //            if (job.Trigger.Equals(context.Trigger) && job.JobInstance != context.JobInstance)
+    //            {
+    //                //job is already running
+    //                return Task.FromResult(true);
+    //            }
+    //        }
+
+    //        if (
+    //            !_applicationSettingsBusiness.IsEnvironmentLocalhost() &&
+    //            !_jobQueueSettings.EnableJobQueuePoll)
+    //        {
+    //            //only quit if NOT localhost and jobQueue Poll is NOT enabled
+    //            return Task.FromResult(true);
+    //        }
+
+    //        return Task.FromResult(false);
+    //    }
+
+    //    public Task TriggerMisfired(ITrigger trigger)
+    //    {
+    //        return Task.FromResult(0);
+    //    }
+
+    //    public Task TriggerComplete(ITrigger trigger, IJobExecutionContext context, SchedulerInstruction triggerInstructionCode)
+    //    {
+    //        return Task.FromResult(0);
+    //    }
+
+    //    public string Name
+    //    {
+    //        get { return JobQueueConsumerQuartzSchedulerEnums.JOB_QUEUE_CONSUMER_JOB_TRIGGER_LISTENER_NAME; }
+    //    }
+    //}
+
+    //public class NInjectQuartzJobFactory<T> : IJobFactory
+    //    where T : IJob
+    //{
+    //    private readonly IResolutionRoot _resolutionRoot;
+
+    //    public NInjectQuartzJobFactory(IResolutionRoot resolutionRoot)
+    //    {
+    //        _resolutionRoot = resolutionRoot;
+    //    }
+
+    //    public IJob NewJob(TriggerFiredBundle bundle, IScheduler scheduler)
+    //    {
+    //        return _resolutionRoot.Get<T>();
+    //    }
+
+    //    public void ReturnJob(IJob job)
+    //    {
+    //        _resolutionRoot.Release(job);
+    //    }
+    //}
+
+    public abstract class SchedulerProvider : SchedulerEntity, ISchedulerProvider
+    {
+        public abstract string Name { get; }
+
+        protected SchedulerProvider(SchedulerConfiguration configuration)
+            : base(configuration)
+        { }
+
+        public abstract IScheduler Provide();
+    }
+
+    public interface IDefaultSchedulerProvider :
+        ISchedulerProvider
+    {
+    }
+
+    public class DefaultSchedulerProvider 
+        : SchedulerProvider, IDefaultSchedulerProvider
+    {
+        public override string Name => "Default";
+
+        //private readonly IResolutionRoot _resolutionRoot;
+        //private readonly IJobQueueSettings _jobQueueSettings;
+        //private readonly IApplicationSettingsBusiness _applicationSettingsBusiness;
+
+        public DefaultSchedulerProvider(SchedulerConfiguration schedulerConfiguration)
+            : base(schedulerConfiguration)
+        {
+
+        }
+
+        public override IScheduler Provide()
+        {
+            var schedulerFactory = new StdSchedulerFactory(
+                new NameValueCollection
+                {
+                    { "quartz.scheduler.instanceName", SchedulerJobName }
+                });
+            var scheduler = schedulerFactory.GetScheduler().Result;
+
+            //scheduler.JobFactory = new NInjectQuartzJobFactory<IJobQueueConsumerQuartzJob>(_resolutionRoot);
+            //scheduler.ListenerManager.AddTriggerListener(new JobQueueConsumerJobTriggerListener(_jobQueueSettings, _applicationSettingsBusiness));
+            return scheduler;
+        }
+    }
+
+    public interface IProviderFactory<TProvider, TProvides>
+        where TProvider : IProvider<TProvides>
+    {
+        void Register(TProvider provider);
+        TProvider Get(string providerName);
+    }
+
+    public abstract class ProviderFactory<TProvider, TProvides> : IProviderFactory<TProvider, TProvides>
+        where TProvider : IProvider<TProvides>
+    {
+        public Dictionary<string, TProvider> Providers { get; } = new Dictionary<string, TProvider>();
+
+        public void Register(TProvider provider)
+        {
+            Providers.Add(provider.Name, provider);
+        }
+
+        public TProvider Get(string providerName)
+        {
+            if (providerName == null)
+            {
+                throw new ArgumentNullException(nameof(providerName));
+            }
+
+            if (!Providers.ContainsKey(providerName))
+            {
+                throw new ArgumentException($"providerName \"{providerName}\" is not registered.");
+            }
+
+            return Providers[providerName];
+        }
+    }
+
+    public class TriggerProviderFactory : ProviderFactory<ITriggerProvider, ITrigger>
+    {
+        public TriggerProviderFactory(ITriggerProviderCron triggerProviderCron, ITriggerProviderInterval triggerProviderInterval)
+        {
+            Register(triggerProviderCron);
+            Register(triggerProviderInterval);
+        }
+    }
+
+    public class JobDetailProviderFactory : ProviderFactory<IJobDetailProvider, IJobDetail>
+    {
+        public JobDetailProviderFactory(IDefaultJobDetailProvider defaultJobDetailProvider)
+        {
+            Register(defaultJobDetailProvider);
+        }
+    }
+
+    public class SchedulerProviderFactory : ProviderFactory<ISchedulerProvider, IScheduler>
+    {
+        public SchedulerProviderFactory(IDefaultSchedulerProvider defaultSchedulerProvider)
+        {
+            Register(defaultSchedulerProvider);
+        }
+    }
+
 
     public interface IQuartzScheduler
     {
-        void Schedule(SchedulerConfiguration schedulerConfiguration);
-        void Reschedule(SchedulerConfiguration schedulerConfiguration);
+        void Schedule();
+        void Reschedule();
     }
 
-    public abstract class QuartzScheduler : IQuartzScheduler
+    public class QuartzScheduler : SchedulerEntity, IQuartzScheduler
     {
-        private readonly TriggerProviderStrategyFactory _triggerProviderStrategyFactory;
-        private readonly IJobDetailProvider _jobDetailProvider;
-        private readonly ISchedulerProvider _schedulerProvider;
+        private readonly TriggerProviderFactory _triggerProviderFactory;
+        private readonly JobDetailProviderFactory _jobDetailProviderFactory;
+        private readonly SchedulerProviderFactory _schedulerProviderFactory;
 
-        public abstract string TriggerName { get; }
-        public abstract string GroupName { get; }
 
-        protected QuartzScheduler(TriggerProviderStrategyFactory triggerProviderStrategyFactory, IJobDetailProvider jobDetailProvider, ISchedulerProvider schedulerProvider)
+        //protected QuartzScheduler(
+        //    TriggerProviderFactory triggerProviderFactory, 
+        //    JobDetailProviderFactory jobDetailProviderFactory, 
+        //    SchedulerProviderFactory schedulerProviderFactory)
+        //{
+        //    _triggerProviderFactory = triggerProviderFactory;
+        //    _jobDetailProviderFactory = jobDetailProviderFactory;
+        //    _schedulerProviderFactory = schedulerProviderFactory;
+        //}
+
+        public QuartzScheduler(SchedulerConfiguration configuration)
+            : base(configuration)
         {
-            _triggerProviderStrategyFactory = triggerProviderStrategyFactory;
-            _jobDetailProvider = jobDetailProvider;
-            _schedulerProvider = schedulerProvider;
+            _triggerProviderFactory = new TriggerProviderFactory(new TriggerProviderCron(configuration), new TriggerProviderInterval(configuration));
+            _jobDetailProviderFactory = new JobDetailProviderFactory(new DefaultJobDetailProvider(configuration));
+            _schedulerProviderFactory = new SchedulerProviderFactory(new DefaultSchedulerProvider(configuration));
         }
 
-        public virtual void Schedule(SchedulerConfiguration schedulerConfiguration=null)
+        public virtual void Schedule()
         {
-            var scheduler = _schedulerProvider.Provide();
+            var schedulerProvider = _schedulerProviderFactory.Get(Configuration.SchedulerName);
+            var scheduler = schedulerProvider.Provide();
 
             scheduler.Start().Wait();
 
-            var job = _jobDetailProvider.Provide();
+            var jobDetailProvider = _jobDetailProviderFactory.Get(Configuration.JobName);
+            var job = jobDetailProvider.Provide();
 
-            var triggerProvider = _triggerProviderStrategyFactory.Get(schedulerConfiguration?.TriggerName);
+            var triggerProvider = _triggerProviderFactory.Get(Configuration.TriggerName);
             var trigger = triggerProvider.Provide();
 
             scheduler.ScheduleJob(job, trigger).Wait();
         }
 
-        public virtual void Reschedule(SchedulerConfiguration schedulerConfiguration=null)
+        public virtual void Reschedule()
         {
-            var triggerProvider = _triggerProviderStrategyFactory.Get(schedulerConfiguration?.TriggerName);
-
-            var scheduler = _schedulerProvider.Provide();
+            var triggerProvider = _triggerProviderFactory.Get(Configuration.TriggerName);
+            var schedulerProvider = _schedulerProviderFactory.Get(Configuration.SchedulerName);
+            var scheduler = schedulerProvider.Provide();
             scheduler.RescheduleJob(
                 new TriggerKey(
                     triggerProvider.Name,
-                    GroupName),
+                    SchedulerGroupName),
                 triggerProvider.Provide());
         }
     }
