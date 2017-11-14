@@ -45,14 +45,31 @@ namespace QuickScheduler
         public string TriggerValue { get; set; }
 
         public string JobName { get; set; }
+        public string JobValue { get; set; }
+        public Guid JobGuid { get; set; } = Guid.NewGuid();
 
-        public readonly SchedulerConfiguration Default = new SchedulerConfiguration
+        public static readonly SchedulerConfiguration Default = new SchedulerConfiguration
         {
             JobName = "Default",
+            JobValue = "Test",
             SchedulerName = "Default",
             TriggerName = "Interval",
             TriggerValue = "1"
         };
+
+        public SchedulerConfiguration()
+        {
+
+        }
+
+        public SchedulerConfiguration(SchedulerConfiguration other)
+        {
+            JobName = other.JobName;
+            JobValue = other.JobValue;
+            SchedulerName = other.SchedulerName;
+            TriggerName = other.TriggerName;
+            TriggerValue = other.TriggerValue;
+        }
     }
 
     public abstract class SchedulerEntity
@@ -63,8 +80,8 @@ namespace QuickScheduler
             Configuration = configuration;
         }
 
-        protected string SchedulerGroupName => $"{Configuration.SchedulerName}_Group";
-        protected string SchedulerJobName => $"{Configuration.SchedulerName}_Job";
+        protected string SchedulerGroupName => $"{Configuration.SchedulerName}_{Configuration.JobGuid}_Group";
+        protected string SchedulerJobName => $"{Configuration.SchedulerName}_{Configuration.JobGuid}_Job";
     }
 
     public abstract class TriggerProvider : SchedulerEntity, ITriggerProvider
@@ -144,7 +161,9 @@ namespace QuickScheduler
         {
             try
             {
-                Console.WriteLine("Test.");
+                var dataMap = context.MergedJobDataMap;
+                var schedulerConfiguration = (SchedulerConfiguration)dataMap[nameof(SchedulerConfiguration)];
+                Console.WriteLine(schedulerConfiguration.JobValue);
             }
             catch (Exception ex)
             {
@@ -172,7 +191,7 @@ namespace QuickScheduler
 
     public class DefaultJobDetailProvider : JobDetailProvider, IDefaultJobDetailProvider
     {
-        public override string Name => "Default";
+        public override string Name => $"{Configuration.JobName}_{Configuration.JobGuid}";
 
         public DefaultJobDetailProvider(SchedulerConfiguration configuration)
             : base(configuration)
@@ -183,6 +202,8 @@ namespace QuickScheduler
             var job = JobBuilder.Create<DefaultJob>()
                 .WithIdentity(SchedulerJobName, SchedulerGroupName)
                 .Build();
+            job.JobDataMap.Put(nameof(SchedulerConfiguration), Configuration);
+
             return job;
         }
     }
